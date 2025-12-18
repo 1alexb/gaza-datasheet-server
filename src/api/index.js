@@ -1,7 +1,7 @@
 const path = require('path');
 const { version } = require('../../package.json');
 const express = require('express');
-const { fetchTechForPalestine, fetchACLED } = require(path.resolve(__dirname, '../externalSources.js'));
+const { fetchTechForPalestine, fetchACLED, fetchReliefWeb } = require(path.resolve(__dirname, '../externalSources.js'));
 
 module.exports = ({ config, controller }) => {
   const api = express.Router();
@@ -57,6 +57,19 @@ module.exports = ({ config, controller }) => {
       });
     }
   });
+
+  // ReliefWeb data
+api.get('/external/reliefweb', async (req, res) => {
+  try {
+    const data = await fetchReliefWeb();
+    res.json(data);
+  } catch (err) {
+    res.status(500).json({
+      error: 'Failed to fetch ReliefWeb data',
+      details: err.message
+    });
+  }
+});
 
   // === Datasheet resource routes ===
   api.get('/:sheet/:tab/:resource/:frag', (req, res) => {

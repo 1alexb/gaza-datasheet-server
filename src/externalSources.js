@@ -124,4 +124,49 @@ async function fetchACLED() {
   }
 }
 
-module.exports = { fetchTechForPalestine, fetchACLED };
+/**
+ * Step 3: Fetch humanitarian reports from ReliefWeb API.
+ */
+async function fetchReliefWeb() {
+  const baseUrl = "https://api.reliefweb.int/v2/reports";
+  const appName = "gaza-timemap-nci-x23177055"; // Your unique app identifier
+  const query = "Gaza"; // Search keyword
+  const limit = 10; // Limit results for efficiency
+
+  const url = `${baseUrl}?appname=${appName}&query[value]=${encodeURIComponent(query)}&limit=${limit}`;
+
+  try {
+    const res = await fetch(url, {
+      headers: { "Accept": "application/json" }
+    });
+
+    if (!res.ok) {
+      throw new Error(`Failed to fetch ReliefWeb data: ${res.status} ${res.statusText}`);
+    }
+
+    const data = await res.json();
+
+    if (!data.data || !Array.isArray(data.data)) {
+      throw new Error("Unexpected ReliefWeb API response format.");
+    }
+
+    // Normalize the ReliefWeb response
+    const normalized = data.data.map(item => ({
+      id: item.id,
+      title: item.fields?.title || "Untitled",
+      source: item.fields?.source?.[0]?.name || "Unknown",
+      date: item.fields?.date?.created || "N/A",
+      url: item.fields?.url || "N/A",
+      country: item.fields?.country?.map(c => c.name).join(", ") || "N/A"
+    }));
+
+    console.log(`Fetched ${normalized.length} ReliefWeb reports.`);
+    return normalized;
+
+  } catch (err) {
+    console.error("ReliefWeb fetch error:", err.message);
+    return [];
+  }
+}
+
+module.exports = { fetchTechForPalestine, fetchACLED, fetchReliefWeb };
