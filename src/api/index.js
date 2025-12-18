@@ -1,8 +1,7 @@
 const path = require('path');
 const { version } = require('../../package.json');
 const express = require('express');
-const copy = require('../copy/en');
-const { fetchTechForPalestine } = require(path.resolve(__dirname, '../externalSources.js'));
+const { fetchTechForPalestine, fetchACLED } = require(path.resolve(__dirname, '../externalSources.js'));
 
 module.exports = ({ config, controller }) => {
   const api = express.Router();
@@ -31,7 +30,9 @@ module.exports = ({ config, controller }) => {
       .catch(err => res.status(404).send({ error: err.message, err }));
   });
 
-  // External data integration route
+  // === External Data Integration Routes ===
+
+  // Tech for Palestine
   api.get('/external/techforpalestine', async (req, res) => {
     try {
       const data = await fetchTechForPalestine();
@@ -44,7 +45,20 @@ module.exports = ({ config, controller }) => {
     }
   });
 
-  // Datasheet resource routes
+  // ACLED data
+  api.get('/external/acled', async (req, res) => {
+    try {
+      const data = await fetchACLED();
+      res.json(data);
+    } catch (err) {
+      res.status(500).json({
+        error: 'Failed to fetch ACLED data',
+        details: err.message
+      });
+    }
+  });
+
+  // === Datasheet resource routes ===
   api.get('/:sheet/:tab/:resource/:frag', (req, res) => {
     const { sheet, tab, resource, frag } = req.params;
     controller.retrieveFrag(sheet, tab, resource, frag)
@@ -59,13 +73,13 @@ module.exports = ({ config, controller }) => {
       .catch(err => res.status(err.status || 404).send({ error: err.message }));
   });
 
-  // Error routes (keep these last)
+  // === Simplified error handling routes ===
   api.get('/:sheet', (req, res) => {
-    res.status(400).send({ error: copy.errors.onlysheet });
+    res.status(400).send({ error: 'Invalid request: missing tab or resource.' });
   });
 
   api.get('/:sheet/:tab', (req, res) => {
-    res.status(400).send({ error: copy.errors.onlyTab });
+    res.status(400).send({ error: 'Invalid request: missing resource fragment.' });
   });
 
   return api;
