@@ -1,75 +1,72 @@
-import { version } from '../../package.json'
-import { Router } from 'express'
-import copy from '../copy/en'
+const path = require('path');
+const { version } = require('../../package.json');
+const express = require('express');
+const copy = require('../copy/en');
+const { fetchTechForPalestine } = require(path.resolve(__dirname, '../externalSources.js'));
 
-export default ({ config, controller }) => {
-  let api = Router()
+module.exports = ({ config, controller }) => {
+  const api = express.Router();
 
+  // Base route - version info
   api.get('/', (req, res) => {
-    res.json({
-      version
-    })
-  })
+    res.json({ version });
+  });
 
+  // Blueprint view route
   api.get('/blueprints', (req, res) => {
-    const bps = controller.blueprints()
+    const bps = controller.blueprints();
     res.render('blueprints', {
       bps: bps.map(bp => ({
         source: bp.sheet.name,
         tab: bp.name,
         urls: bp.urls
       }))
-    })
-  })
+    });
+  });
 
+  // Update route for Google Sheets or XLSX data
   api.get('/update', (req, res) => {
-    controller
-      .update()
-      .then(msg =>
-        res.json({
-          success: msg
-        })
-      )
-      .catch(err => {
-        res.status(404)
-          .send({ error: err.message, err })
-      })
-  })
+    controller.update()
+      .then(msg => res.json({ success: msg }))
+      .catch(err => res.status(404).send({ error: err.message, err }));
+  });
 
+  // External data integration route
+  api.get('/external/techforpalestine', async (req, res) => {
+    try {
+      const data = await fetchTechForPalestine();
+      res.json(data);
+    } catch (err) {
+      res.status(500).json({
+        error: 'Failed to fetch Tech For Palestine data',
+        details: err.message
+      });
+    }
+  });
+
+  // Datasheet resource routes
   api.get('/:sheet/:tab/:resource/:frag', (req, res) => {
-    const { sheet, tab, resource, frag } = req.params
-    controller
-      .retrieveFrag(sheet, tab, resource, frag)
+    const { sheet, tab, resource, frag } = req.params;
+    controller.retrieveFrag(sheet, tab, resource, frag)
       .then(data => res.json(data))
-      .catch(err =>
-        res.status(err.status || 404)
-          .send({ error: err.message })
-      )
-  })
+      .catch(err => res.status(err.status || 404).send({ error: err.message }));
+  });
 
   api.get('/:sheet/:tab/:resource', (req, res) => {
-    const { sheet, tab, resource } = req.params
-    controller
-      .retrieve(sheet, tab, resource)
+    const { sheet, tab, resource } = req.params;
+    controller.retrieve(sheet, tab, resource)
       .then(data => res.json(data))
-      .catch(err =>
-        res.status(err.status || 404)
-          .send({ error: err.message })
-      )
-  })
+      .catch(err => res.status(err.status || 404).send({ error: err.message }));
+  });
 
-  // ERROR routes. Note that it is important that these come AFTER routes
-  // like /update, so that the regex does not greedily match these routes.
-
+  // Error routes (keep these last)
   api.get('/:sheet', (req, res) => {
-    res.status(400)
-      .send({ error: copy.errors.onlysheet })
-  })
+    res.status(400).send({ error: copy.errors.onlysheet });
+  });
 
   api.get('/:sheet/:tab', (req, res) => {
-    res.status(400)
-      .send({ error: copy.errors.onlyTab })
-  })
+    res.status(400).send({ error: copy.errors.onlyTab });
+  });
 
-  return api
-}
+  return api;
+};
