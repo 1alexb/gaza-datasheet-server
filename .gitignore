@@ -15,3 +15,10 @@ tags.lock
 tags.temp
 src/config.js
 src/local.config.js
+
+.env.*
+credentials.json
+*.key
+*.crt
+*.p12
+*.pfx

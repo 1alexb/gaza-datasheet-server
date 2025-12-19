@@ -1,7 +1,12 @@
 const path = require('path');
 const { version } = require('../../package.json');
 const express = require('express');
-const { fetchTechForPalestine, fetchACLED, fetchReliefWeb } = require(path.resolve(__dirname, '../externalSources.js'));
+const {
+  fetchTechForPalestine,
+  fetchTechForPalestineDaily,
+  fetchACLED,
+  fetchReliefWeb
+} = require(path.resolve(__dirname, '../externalSources.js'));
 
 module.exports = ({ config, controller }) => {
   const api = express.Router();
@@ -32,7 +37,7 @@ module.exports = ({ config, controller }) => {
 
   // === External Data Integration Routes ===
 
-  // Tech for Palestine
+  // Tech for Palestine (summary)
   api.get('/external/techforpalestine', async (req, res) => {
     try {
       const data = await fetchTechForPalestine();
@@ -40,6 +45,19 @@ module.exports = ({ config, controller }) => {
     } catch (err) {
       res.status(500).json({
         error: 'Failed to fetch Tech For Palestine data',
+        details: err.message
+      });
+    }
+  });
+
+  // Tech for Palestine (daily casualties)
+  api.get('/external/techforpalestine-daily', async (req, res) => {
+    try {
+      const data = await fetchTechForPalestineDaily();
+      res.json(data);
+    } catch (err) {
+      res.status(500).json({
+        error: 'Failed to fetch Tech For Palestine daily data',
         details: err.message
       });
     }
@@ -59,17 +77,17 @@ module.exports = ({ config, controller }) => {
   });
 
   // ReliefWeb data
-api.get('/external/reliefweb', async (req, res) => {
-  try {
-    const data = await fetchReliefWeb();
-    res.json(data);
-  } catch (err) {
-    res.status(500).json({
-      error: 'Failed to fetch ReliefWeb data',
-      details: err.message
-    });
-  }
-});
+  api.get('/external/reliefweb', async (req, res) => {
+    try {
+      const data = await fetchReliefWeb();
+      res.json(data);
+    } catch (err) {
+      res.status(500).json({
+        error: 'Failed to fetch ReliefWeb data',
+        details: err.message
+      });
+    }
+  });
 
   // === Datasheet resource routes ===
   api.get('/:sheet/:tab/:resource/:frag', (req, res) => {

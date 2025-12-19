@@ -35,6 +35,43 @@ async function fetchTechForPalestine() {
 }
 
 /**
+ * Step 1.1: Fetch daily casualty data from TechForPalestine (time-based dataset)
+ */
+async function fetchTechForPalestineDaily() {
+ const url = "https://data.techforpalestine.org/api/v2/casualties_daily.json";
+
+  try {
+    const res = await fetch(url);
+    if (!res.ok) {
+      throw new Error(`Failed to fetch daily casualties: ${res.status}`);
+    }
+
+    const data = await res.json();
+
+    if (!Array.isArray(data)) {
+      throw new Error("Unexpected daily casualties response format");
+    }
+
+    const normalized = data.map(entry => ({
+      date: entry.report_date,
+      killed: entry.killed ?? null,
+      killed_cum: entry.killed_cum ?? null,
+      injured: entry.injured ?? null,
+      injured_cum: entry.injured_cum ?? null,
+      region: "Gaza",
+      source: "TechForPalestine-Daily"
+    }));
+
+    console.log(`Fetched ${normalized.length} daily casualty records.`);
+    return normalized;
+
+  } catch (err) {
+    console.error("TechForPalestine daily fetch error:", err.message);
+    return [];
+  }
+}
+
+/**
  * Step 2: Fetch conflict events from ACLED API.
  * Note: Endpoint instability currently handled gracefully.
  */
@@ -100,6 +137,7 @@ async function fetchReliefWeb() {
 
 module.exports = {
   fetchTechForPalestine,
+  fetchTechForPalestineDaily,
   fetchACLED,
   fetchReliefWeb
 };
