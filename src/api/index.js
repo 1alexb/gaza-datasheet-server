@@ -89,6 +89,91 @@ module.exports = ({ config, controller }) => {
     }
   });
 
+  // === Aggregated external events (Timemap-ready) ===
+  api.get('/external/events', async (req, res) => {
+    try {
+      const { from, to, source } = req.query;
+
+      const [
+        tfpSummary,
+        tfpDaily,
+        reliefWeb
+      ] = await Promise.all([
+        fetchTechForPalestine(),
+        fetchTechForPalestineDaily(),
+        fetchReliefWeb()
+      ]);
+
+      // Extract Timemap-aligned event objects only
+      let events = []
+        .concat(tfpSummary || [])
+        .concat(tfpDaily || [])
+        .concat(reliefWeb || [])
+        .map(item => item.event)
+        .filter(Boolean);
+
+      // Optional source filter
+      if (source) {
+        events = events.filter(e => e.source === source);
+      }
+
+      // Optional date range filtering
+      if (from) {
+        events = events.filter(e => e.date && e.date >= from);
+      }
+
+      if (to) {
+        events = events.filter(e => e.date && e.date <= to);
+      }
+
+      // Deterministic ordering: newest dated events first, undated last
+      events.sort((a, b) => {
+        if (!a.date && !b.date) return 0;
+        if (!a.date) return 1;
+        if (!b.date) return -1;
+        return b.date.localeCompare(a.date);
+      });
+
+      res.json(events);
+
+    } catch (err) {
+      res.status(500).json({
+        error: 'Failed to aggregate external events',
+        details: err.message
+      });
+    }
+  });
+
+  // === External data health/status endpoint ===
+  api.get('/external/health', async (req, res) => {
+    const status = {
+      techforpalestine: 'unknown',
+      techforpalestine_daily: 'unknown',
+      reliefweb: 'unknown',
+      acled: 'degraded'
+    };
+
+    try {
+      if ((await fetchTechForPalestine()).length) {
+        status.techforpalestine = 'ok';
+      }
+    } catch (_) {}
+
+    try {
+      if ((await fetchTechForPalestineDaily()).length) {
+        status.techforpalestine_daily = 'ok';
+      }
+    } catch (_) {}
+
+    try {
+      if ((await fetchReliefWeb()).length) {
+        status.reliefweb = 'ok';
+      }
+    } catch (_) {}
+
+    res.json(status);
+  });
+
   // === Datasheet resource routes ===
   api.get('/:sheet/:tab/:resource/:frag', (req, res) => {
     const { sheet, tab, resource, frag } = req.params;

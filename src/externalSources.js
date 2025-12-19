@@ -2,6 +2,19 @@
 const fetch = require('node-fetch');
 
 /**
+ * Shared helper: build a Timemap-aligned event object with consistent keys.
+ */
+function buildTimemapEvent({ date, location, latitude, longitude, source }) {
+  return {
+    date: date || null,
+    location: location || null,
+    latitude: latitude ?? null,
+    longitude: longitude ?? null,
+    source: source || null
+  };
+}
+
+/**
  * Step 1: Fetch Gaza casualty summary from TechForPalestine dataset.
  */
 async function fetchTechForPalestine() {
@@ -13,6 +26,7 @@ async function fetchTechForPalestine() {
 
     const data = await res.json();
     const gazaData = data.gaza?.killed || {};
+    const today = new Date().toISOString().slice(0, 10);
 
     const normalized = [
       {
@@ -22,7 +36,16 @@ async function fetchTechForPalestine() {
         men: gazaData.men || 0,
         children: gazaData.children || 0,
         source: "TechForPalestine",
-        lastUpdated: new Date().toISOString()
+        lastUpdated: new Date().toISOString(),
+
+        // Timemap-aligned event representation (summary snapshot)
+        event: buildTimemapEvent({
+          date: today,
+          location: "Gaza",
+          latitude: null,
+          longitude: null,
+          source: "TechForPalestine"
+        })
       }
     ];
 
@@ -38,7 +61,7 @@ async function fetchTechForPalestine() {
  * Step 1.1: Fetch daily casualty data from TechForPalestine (time-based dataset)
  */
 async function fetchTechForPalestineDaily() {
- const url = "https://data.techforpalestine.org/api/v2/casualties_daily.json";
+  const url = "https://data.techforpalestine.org/api/v2/casualties_daily.json";
 
   try {
     const res = await fetch(url);
@@ -59,7 +82,16 @@ async function fetchTechForPalestineDaily() {
       injured: entry.injured ?? null,
       injured_cum: entry.injured_cum ?? null,
       region: "Gaza",
-      source: "TechForPalestine-Daily"
+      source: "TechForPalestine-Daily",
+
+      // Timemap-aligned event representation
+      event: buildTimemapEvent({
+        date: entry.report_date,
+        location: "Gaza",
+        latitude: null,
+        longitude: null,
+        source: "TechForPalestine-Daily"
+      })
     }));
 
     console.log(`Fetched ${normalized.length} daily casualty records.`);
@@ -117,14 +149,28 @@ async function fetchReliefWeb() {
     }
 
     // Normalize the ReliefWeb response
-    const normalized = data.data.map(item => ({
-      id: item.id,
-      title: item.fields?.title || "Untitled",
-      source: item.fields?.source?.[0]?.name || "ReliefWeb",
-      date: item.fields?.date?.created || "N/A",
-      url: item.fields?.url || "N/A",
-      country: item.fields?.country?.map(c => c.name).join(", ") || "N/A"
-    }));
+    const normalized = data.data.map(item => {
+      const created = item.fields?.date?.created || null;
+      const eventDate = created ? created.slice(0, 10) : null;
+
+      return {
+        id: item.id,
+        title: item.fields?.title || "Untitled",
+        source: item.fields?.source?.[0]?.name || "ReliefWeb",
+        date: created || "N/A",
+        url: item.fields?.url || "N/A",
+        country: item.fields?.country?.map(c => c.name).join(", ") || "N/A",
+
+        // Timemap-aligned event representation
+        event: buildTimemapEvent({
+          date: eventDate,
+          location: "Gaza",
+          latitude: null,
+          longitude: null,
+          source: "ReliefWeb"
+        })
+      };
+    });
 
     console.log(`Fetched ${normalized.length} ReliefWeb reports.`);
     return normalized;
