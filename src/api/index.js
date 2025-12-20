@@ -32,7 +32,9 @@ module.exports = ({ config, controller }) => {
   api.get('/update', (req, res) => {
     controller.update()
       .then(msg => res.json({ success: msg }))
-      .catch(err => res.status(404).send({ error: err.message, err }));
+      .catch(err =>
+        res.status(404).send({ error: err.message, err })
+      );
   });
 
   // === External Data Integration Routes ===
@@ -90,8 +92,15 @@ module.exports = ({ config, controller }) => {
   });
 
   // === Aggregated external events (Timemap-ready) ===
+  // CONTRACT: This endpoint exposes a stable, normalized event schema.
+  // Downstream consumers (Timemap, UI, analysis) must rely ONLY on this shape.
+  // Source-specific fields must NOT be added here.
+
   api.get('/external/events', async (req, res) => {
     try {
+      // Explicitly disable caching to preserve contract determinism
+      res.set('Cache-Control', 'no-store');
+
       const { from, to, source } = req.query;
 
       const [
@@ -144,7 +153,66 @@ module.exports = ({ config, controller }) => {
     }
   });
 
-  // === External data health/status endpoint ===
+  // === Derived analytics over frozen external events contract ===
+  // No source-specific logic allowed here.
+
+  api.get('/external/analytics/events', async (req, res) => {
+    try {
+      const [
+        tfpSummary,
+        tfpDaily,
+        reliefWeb
+      ] = await Promise.all([
+        fetchTechForPalestine(),
+        fetchTechForPalestineDaily(),
+        fetchReliefWeb()
+      ]);
+
+      const events = []
+        .concat(tfpSummary || [])
+        .concat(tfpDaily || [])
+        .concat(reliefWeb || [])
+        .map(item => item.event)
+        .filter(Boolean);
+
+      const bySource = {};
+      let earliest = null;
+      let latest = null;
+      let undated = 0;
+
+      for (const e of events) {
+        bySource[e.source] = (bySource[e.source] || 0) + 1;
+
+        if (!e.date) {
+          undated++;
+          continue;
+        }
+
+        if (!earliest || e.date < earliest) earliest = e.date;
+        if (!latest || e.date > latest) latest = e.date;
+      }
+
+      res.json({
+        totalEvents: events.length,
+        bySource,
+        dateRange: {
+          earliest,
+          latest
+        },
+        undatedEvents: undated
+      });
+
+    } catch (err) {
+      res.status(500).json({
+        error: 'Failed to compute event analytics',
+        details: err.message
+      });
+    }
+  });
+
+  // === External data availability & degradation monitoring ===
+  // Used to demonstrate resilience and partial failure handling.
+
   api.get('/external/health', async (req, res) => {
     const status = {
       techforpalestine: 'unknown',
@@ -175,27 +243,37 @@ module.exports = ({ config, controller }) => {
   });
 
   // === Datasheet resource routes ===
+
   api.get('/:sheet/:tab/:resource/:frag', (req, res) => {
     const { sheet, tab, resource, frag } = req.params;
     controller.retrieveFrag(sheet, tab, resource, frag)
       .then(data => res.json(data))
-      .catch(err => res.status(err.status || 404).send({ error: err.message }));
+      .catch(err =>
+        res.status(err.status || 404).send({ error: err.message })
+      );
   });
 
   api.get('/:sheet/:tab/:resource', (req, res) => {
     const { sheet, tab, resource } = req.params;
     controller.retrieve(sheet, tab, resource)
       .then(data => res.json(data))
-      .catch(err => res.status(err.status || 404).send({ error: err.message }));
+      .catch(err =>
+        res.status(err.status || 404).send({ error: err.message })
+      );
   });
 
   // === Simplified error handling routes ===
+
   api.get('/:sheet', (req, res) => {
-    res.status(400).send({ error: 'Invalid request: missing tab or resource.' });
+    res.status(400).send({
+      error: 'Invalid request: missing tab or resource.'
+    });
   });
 
   api.get('/:sheet/:tab', (req, res) => {
-    res.status(400).send({ error: 'Invalid request: missing resource fragment.' });
+    res.status(400).send({
+      error: 'Invalid request: missing resource fragment.'
+    });
   });
 
   return api;
