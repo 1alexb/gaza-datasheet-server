@@ -7,6 +7,7 @@ const {
   fetchACLED,
   fetchReliefWeb
 } = require(path.resolve(__dirname, '../externalSources.js'));
+const { writeEventsToXlsx } = require(path.resolve(__dirname, '../lib/externalXlsxWriter.js'));
 
 module.exports = ({ config, controller }) => {
   const api = express.Router();
@@ -205,6 +206,104 @@ module.exports = ({ config, controller }) => {
     } catch (err) {
       res.status(500).json({
         error: 'Failed to compute event analytics',
+        details: err.message
+      });
+    }
+  });
+
+  // === Sync frozen external events into the Timemap XLSX export tab ===
+  //
+  // 1) fetch frozen /external/events contract (event objects only)
+  // 2) write into data/gaza_timemap.xlsx -> export_events (template-driven)
+  // 3) run controller.update() so datasheet-server serves the new rows immediately
+
+  api.get('/external/sync-xlsx', async (req, res) => {
+    try {
+      res.set('Cache-Control', 'no-store');
+
+      // Use same query semantics as /external/events for reproducible subsets
+      const { from, to, source } = req.query;
+
+      const [
+        tfpSummary,
+        tfpDaily,
+        reliefWeb
+      ] = await Promise.all([
+        fetchTechForPalestine(),
+        fetchTechForPalestineDaily(),
+        fetchReliefWeb()
+      ]);
+
+      let events = []
+        .concat(tfpSummary || [])
+        .concat(tfpDaily || [])
+        .concat(reliefWeb || [])
+        .map(item => item.event)
+        .filter(Boolean);
+
+      if (source) {
+        events = events.filter(e => e.source === source);
+      }
+
+      if (from) {
+        events = events.filter(e => e.date && e.date >= from);
+      }
+
+      if (to) {
+        events = events.filter(e => e.date && e.date <= to);
+      }
+
+      // Deterministic ordering (same logic as /external/events)
+      events.sort((a, b) => {
+        if (!a.date && !b.date) return 0;
+        if (!a.date) return 1;
+        if (!b.date) return -1;
+        return b.date.localeCompare(a.date);
+      });
+
+      // Resolve XLSX path from config (prefer gaza_timemap)
+      const xlsxList =
+        (config && config.xlsx) ||
+        (config && config.default && config.default.xlsx) ||
+        [];
+
+      const xlsxCfg =
+        xlsxList.find(x => x.name === 'gaza_timemap') ||
+        xlsxList[0];
+
+      // Hard fallback (keeps dev unblocked even if config is not injected)
+      const fallbackRelPath = 'data/gaza_timemap.xlsx';
+
+      const xlsxPath = xlsxCfg && xlsxCfg.path
+        ? path.resolve(process.cwd(), xlsxCfg.path)
+        : path.resolve(process.cwd(), fallbackRelPath);
+
+      if (!xlsxPath) {
+        return res.status(500).json({
+          error: 'No XLSX path could be resolved'
+        });
+      }
+
+      // Write events into export_events tab
+      writeEventsToXlsx({
+        xlsxPath,
+        sheetName: 'EXPORT_EVENTS',
+        events
+      });
+
+      // Reload datasheet-server in-memory state from XLSX
+      await controller.update();
+
+      res.json({
+        success: true,
+        wroteEvents: events.length,
+        xlsx: (xlsxCfg && xlsxCfg.name) || 'gaza_timemap',
+        path: (xlsxCfg && xlsxCfg.path) || fallbackRelPath
+      });
+
+    } catch (err) {
+      res.status(500).json({
+        error: 'Failed to sync external events into XLSX',
         details: err.message
       });
     }

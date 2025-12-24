@@ -1,6 +1,15 @@
 // src/externalSources.js
 const fetch = require('node-fetch');
 
+/*
+ * CONTRACT NOTICE:
+ * All external sources must normalize their data into a Timemap compatible
+ * `event` object. The aggregated `/external/events` endpoint relies on this
+ * contract and must remain schema stable.
+ *
+ * Source specific fields MUST NOT leak into the aggregated event stream.
+ */
+
 /**
  * Shared helper: build a Timemap-aligned event object with consistent keys.
  */
