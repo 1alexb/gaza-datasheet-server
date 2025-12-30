@@ -1,9 +1,10 @@
 // src/lib/externalXlsxWriter.js
 const XLSX = require('xlsx');
 const crypto = require('crypto');
+const { GAZA_CENTROID } = require('./geoDefaults');
 
 /**
- * Build a stable-ish ID from event fields (deterministic for same inputs).
+ * Build a stable ID from event fields.
  */
 function stableId(e) {
   const raw = [
@@ -25,31 +26,25 @@ function stableId(e) {
 
 /**
  * Timemap expects:
- *   DATE_FMT = MM/DD/YYYY
- *   TIME_FMT = hh:mm   (12-hour, no AM/PM)
- *
- * Datasheet-server must emit strings ONLY.
+ * DATE_FMT = MM/DD/YYYY
+ * TIME_FMT = hh:mm   (12-hour, no AM/PM)
  */
 function normalizeDateForTimemap(date) {
   if (!date) return '';
-
   // Expect upstream date as YYYY-MM-DD
   const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(date).trim());
   if (!m) return '';
-
   const [, yyyy, mm, dd] = m;
   return `${mm}/${dd}/${yyyy}`;
 }
 
 function normalizeTimeForTimemap(time) {
-  // Timemap defaults empty time to 00:00 internally,
-  // but validator rejects invalid datetime, so we emit a safe value.
   return '12:00';
 }
 
 /**
- * Map a frozen-contract event into a row value for a given column header.
- * Template-driven: preserves column order and names.
+ * Map a frozen contract event into a row value for a given column header.
+ * Template driven: preserves column order and names.
  */
 function valueForHeader(header, e) {
   const h = String(header || '').trim().toLowerCase();
@@ -57,39 +52,39 @@ function valueForHeader(header, e) {
   if (h === 'id') return stableId(e);
 
   if (h === 'title') {
-    return `${e.source || 'External'} — ${e.location || 'Unknown'}`;
+    return e.title || `${e.source || 'External'} — ${e.location || 'Unknown'}`;
   }
 
+  // ENRICHED DESCRIPTION: Adds URL if available
   if (h === 'description' || h === 'desc') {
-    const d = e.date
-      ? `Imported event dated ${e.date}.`
-      : 'Imported undated event.';
-    return `${d} Source: ${e.source || 'unknown'}`;
+    let d = e.description || (e.date ? `Imported event dated ${e.date}.` : 'Imported undated event.');
+    if (e.url) {
+      d += `\n\nSource Link: ${e.url}`;
+    }
+    return d;
   }
 
-  if (h === 'date') {
-    return normalizeDateForTimemap(e.date);
-  }
-
-  if (h === 'time') {
-    return normalizeTimeForTimemap(e.time);
-  }
-
+  if (h === 'date') return normalizeDateForTimemap(e.date);
+  if (h === 'time') return normalizeTimeForTimemap(e.time);
   if (h === 'location' || h === 'place') return e.location || '';
+  if (h === 'latitude' || h === 'lat') return e.latitude ?? GAZA_CENTROID.latitude;
+  if (h === 'longitude' || h === 'lon' || h === 'lng') return e.longitude ?? GAZA_CENTROID.longitude;
 
-  if (h === 'latitude' || h === 'lat') return e.latitude ?? '';
-  if (h === 'longitude' || h === 'lon' || h === 'lng') return e.longitude ?? '';
+  // This maps the source to the Association IDs defined in seed_categories.js
+  if (h === 'association1') {
+    const src = (e.source || '').toLowerCase();
+    if (src.includes('techforpalestine')) return 'casualties';
+    if (src.includes('reliefweb')) return 'humanitarian';
+    return ''; // Default/None
+  }
 
-  // Association / source reference columns intentionally left blank
-  if (h.startsWith('association')) return '';
-  if (h.startsWith('source')) return '';
+  if (h === 'source1') return e.source || '';
 
   return '';
 }
 
 /**
  * Overwrite EXPORT_EVENTS with header + event rows.
- * Workbook and template structure preserved.
  */
 function writeEventsToXlsx({ xlsxPath, sheetName = 'EXPORT_EVENTS', events }) {
   const wb = XLSX.readFile(xlsxPath);
@@ -114,6 +109,8 @@ function writeEventsToXlsx({ xlsxPath, sheetName = 'EXPORT_EVENTS', events }) {
 
   wb.Sheets[sheetName] = XLSX.utils.aoa_to_sheet(out);
   XLSX.writeFile(wb, xlsxPath);
+  
+  console.log(`[XLSX Writer] Wrote ${events.length} rows to ${sheetName}`);
 }
 
 module.exports = {

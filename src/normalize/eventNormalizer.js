@@ -1,6 +1,6 @@
 /**
- * Normalize external data records into a minimal Timemap-compatible event.
- * This is intentionally minimal and source-agnostic.
+ * Normalize external data records into a minimal Timemap compatible event.
+ * This is intentionally minimal and source agnostic.
  */
 function normalizeEvent({ date, location, latitude, longitude, source }) {
   return {

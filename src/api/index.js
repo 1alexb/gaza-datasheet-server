@@ -1,10 +1,12 @@
 const path = require('path');
 const { version } = require('../../package.json');
 const express = require('express');
+const cron = require('node-cron');
+const rateLimit = require('express-rate-limit'); // Security Feature
+
 const {
   fetchTechForPalestine,
   fetchTechForPalestineDaily,
-  fetchACLED,
   fetchReliefWeb
 } = require(path.resolve(__dirname, '../externalSources.js'));
 const { writeEventsToXlsx } = require(path.resolve(__dirname, '../lib/externalXlsxWriter.js'));
@@ -12,7 +14,102 @@ const { writeEventsToXlsx } = require(path.resolve(__dirname, '../lib/externalXl
 module.exports = ({ config, controller }) => {
   const api = express.Router();
 
-  // Base route - version info
+  // --- HELPER: Structured Logging ---
+  const log = (msg, context = 'SYSTEM') => {
+    const timestamp = new Date().toISOString();
+    console.log(`[${timestamp}] [${context}] ${msg}`);
+  };
+
+  const logError = (msg, context = 'ERROR') => {
+    const timestamp = new Date().toISOString();
+    console.error(`[${timestamp}] [${context}] ${msg}`);
+  };
+
+  // --- MIDDLEWARE: Rate Limiting ---
+  // Limits each IP to 100 requests every 15 minutes
+  const limiter = rateLimit({
+    windowMs: 15 * 60 * 1000, 
+    max: 100,
+    message: { error: 'Too many requests, please try again later.' }
+  });
+  api.use(limiter);
+
+  // --- HELPER: The Core Sync Logic ---
+  async function runSyncProcess(triggerSource = 'MANUAL') {
+    log('Starting data synchronization...', triggerSource);
+    
+    // 1. Fetch
+    const [tfpSummary, tfpDaily, reliefWeb] = await Promise.all([
+      fetchTechForPalestine(),
+      fetchTechForPalestineDaily(),
+      fetchReliefWeb()
+    ]);
+
+    // 2. Aggregate
+    let events = []
+      .concat(tfpSummary || [])
+      .concat(tfpDaily || [])
+      .concat(reliefWeb || [])
+      .map(item => item.event)
+      .filter(Boolean);
+
+    // 3. Sort
+    events.sort((a, b) => {
+      if (!a.date && !b.date) return 0;
+      if (!a.date) return 1;
+      if (!b.date) return -1;
+      return b.date.localeCompare(a.date);
+    });
+
+    // 4. Resolve Path
+    const xlsxList = (config && config.xlsx) || (config && config.default && config.default.xlsx) || [];
+    const xlsxCfg = xlsxList.find(x => x.name === 'gaza_timemap') || xlsxList[0];
+    const fallbackRelPath = 'data/gaza_timemap.xlsx';
+    const xlsxPath = xlsxCfg && xlsxCfg.path
+      ? path.resolve(process.cwd(), xlsxCfg.path)
+      : path.resolve(process.cwd(), fallbackRelPath);
+
+    if (!xlsxPath) throw new Error('No XLSX path resolved');
+
+    // 5. Write to DB
+    writeEventsToXlsx({
+      xlsxPath,
+      sheetName: 'EXPORT_EVENTS',
+      events
+    });
+
+    // 6. Refresh Memory
+    await controller.update();
+    
+    log(`Sync Complete. Processed ${events.length} events.`, triggerSource);
+    return events.length;
+  }
+
+  // --- AUTOMATION: Cron Job ---
+  // Runs automatically every 6 hours
+  cron.schedule('0 */6 * * *', async () => {
+    try {
+      await runSyncProcess('AUTO-CRON');
+    } catch (err) {
+      logError(`Auto-Sync Failed: ${err.message}`, 'CRON-ERROR');
+    }
+  });
+
+  // --- MIDDLEWARE: Admin Guard ---
+  const requireAdmin = (req, res, next) => {
+    const secret = req.query.secret;
+    if (secret === 'admin2024') {
+      next();
+    } else {
+      logError(`Unauthorized access attempt from ${req.ip}`, 'SECURITY');
+      res.status(403).json({
+        error: 'Forbidden: Admin access required.',
+        message: 'This action is protected. Please provide the correct ?secret= key.'
+      });
+    }
+  };
+
+  // Base route
   api.get('/', (req, res) => {
     res.json({ version });
   });
@@ -29,92 +126,47 @@ module.exports = ({ config, controller }) => {
     });
   });
 
-  // Update route for Google Sheets or XLSX data
-  api.get('/update', (req, res) => {
+  // Analytics Dashboard
+  api.get('/dashboard', (req, res) => {
+    res.render('dashboard');
+  });
+
+  // Update route
+  api.get('/update', requireAdmin, (req, res) => {
     controller.update()
-      .then(msg => res.json({ success: msg }))
+      .then(msg => {
+        log('Manual update triggered via /update', 'ADMIN');
+        res.json({ success: msg });
+      })
       .catch(err =>
         res.status(404).send({ error: err.message, err })
       );
   });
 
-  // === External Data Integration Routes ===
-
-  // Tech for Palestine (summary)
+  // === Public Data Routes ===
   api.get('/external/techforpalestine', async (req, res) => {
-    try {
-      const data = await fetchTechForPalestine();
-      res.json(data);
-    } catch (err) {
-      res.status(500).json({
-        error: 'Failed to fetch Tech For Palestine data',
-        details: err.message
-      });
-    }
+    try { res.json(await fetchTechForPalestine()); } catch (err) { res.status(500).json({ error: err.message }); }
   });
 
-  // Tech for Palestine (daily casualties)
   api.get('/external/techforpalestine-daily', async (req, res) => {
-    try {
-      const data = await fetchTechForPalestineDaily();
-      res.json(data);
-    } catch (err) {
-      res.status(500).json({
-        error: 'Failed to fetch Tech For Palestine daily data',
-        details: err.message
-      });
-    }
+    try { res.json(await fetchTechForPalestineDaily()); } catch (err) { res.status(500).json({ error: err.message }); }
   });
 
-  // ACLED data
-  api.get('/external/acled', async (req, res) => {
-    try {
-      const data = await fetchACLED();
-      res.json(data);
-    } catch (err) {
-      res.status(500).json({
-        error: 'Failed to fetch ACLED data',
-        details: err.message
-      });
-    }
-  });
-
-  // ReliefWeb data
   api.get('/external/reliefweb', async (req, res) => {
-    try {
-      const data = await fetchReliefWeb();
-      res.json(data);
-    } catch (err) {
-      res.status(500).json({
-        error: 'Failed to fetch ReliefWeb data',
-        details: err.message
-      });
-    }
+    try { res.json(await fetchReliefWeb()); } catch (err) { res.status(500).json({ error: err.message }); }
   });
 
-  // === Aggregated external events (Timemap-ready) ===
-  // CONTRACT: This endpoint exposes a stable, normalized event schema.
-  // Downstream consumers (Timemap, UI, analysis) must rely ONLY on this shape.
-  // Source-specific fields must NOT be added here.
-
+  // === Aggregated Events ===
   api.get('/external/events', async (req, res) => {
     try {
-      // Explicitly disable caching to preserve contract determinism
       res.set('Cache-Control', 'no-store');
-
       const { from, to, source } = req.query;
-
-      const [
-        tfpSummary,
-        tfpDaily,
-        reliefWeb
-      ] = await Promise.all([
+      const [tfpSummary, tfpDaily, reliefWeb] = await Promise.all([
         fetchTechForPalestine(),
         fetchTechForPalestineDaily(),
         fetchReliefWeb()
       ]);
 
-      // Extract Timemap-aligned event objects only
       let events = []
         .concat(tfpSummary || [])
         .concat(tfpDaily || [])
@@ -122,21 +174,10 @@ module.exports = ({ config, controller }) => {
         .map(item => item.event)
         .filter(Boolean);
 
-      // Optional source filter
-      if (source) {
-        events = events.filter(e => e.source === source);
-      }
+      if (source) events = events.filter(e => e.source === source);
+      if (from) events = events.filter(e => e.date && e.date >= from);
+      if (to) events = events.filter(e => e.date && e.date <= to);
 
-      // Optional date range filtering
-      if (from) {
-        events = events.filter(e => e.date && e.date >= from);
-      }
-
-      if (to) {
-        events = events.filter(e => e.date && e.date <= to);
-      }
-
-      // Deterministic ordering: newest dated events first, undated last
       events.sort((a, b) => {
         if (!a.date && !b.date) return 0;
         if (!a.date) return 1;
@@ -145,25 +186,16 @@ module.exports = ({ config, controller }) => {
       });
 
       res.json(events);
-
     } catch (err) {
-      res.status(500).json({
-        error: 'Failed to aggregate external events',
-        details: err.message
-      });
+      logError(err.message, 'API-EVENTS');
+      res.status(500).json({ error: 'Failed', details: err.message });
     }
   });
 
-  // === Derived analytics over frozen external events contract ===
-  // No source-specific logic allowed here.
-
+  // === Analytics ===
   api.get('/external/analytics/events', async (req, res) => {
     try {
-      const [
-        tfpSummary,
-        tfpDaily,
-        reliefWeb
-      ] = await Promise.all([
+      const [tfpSummary, tfpDaily, reliefWeb] = await Promise.all([
         fetchTechForPalestine(),
         fetchTechForPalestineDaily(),
         fetchReliefWeb()
@@ -183,12 +215,7 @@ module.exports = ({ config, controller }) => {
 
       for (const e of events) {
         bySource[e.source] = (bySource[e.source] || 0) + 1;
-
-        if (!e.date) {
-          undated++;
-          continue;
-        }
-
+        if (!e.date) { undated++; continue; }
         if (!earliest || e.date < earliest) earliest = e.date;
         if (!latest || e.date > latest) latest = e.date;
       }
@@ -196,183 +223,63 @@ module.exports = ({ config, controller }) => {
       res.json({
         totalEvents: events.length,
         bySource,
-        dateRange: {
-          earliest,
-          latest
-        },
+        dateRange: { earliest, latest },
         undatedEvents: undated
       });
-
     } catch (err) {
-      res.status(500).json({
-        error: 'Failed to compute event analytics',
-        details: err.message
-      });
+      res.status(500).json({ error: 'Analytics Failed', details: err.message });
     }
   });
 
-  // === Sync frozen external events into the Timemap XLSX export tab ===
-  //
-  // 1) fetch frozen /external/events contract (event objects only)
-  // 2) write into data/gaza_timemap.xlsx -> export_events (template-driven)
-  // 3) run controller.update() so datasheet-server serves the new rows immediately
-
-  api.get('/external/sync-xlsx', async (req, res) => {
+  // === Sync Pipeline (PROTECTED) ===
+  api.get('/external/sync-xlsx', requireAdmin, async (req, res) => {
     try {
       res.set('Cache-Control', 'no-store');
-
-      // Use same query semantics as /external/events for reproducible subsets
-      const { from, to, source } = req.query;
-
-      const [
-        tfpSummary,
-        tfpDaily,
-        reliefWeb
-      ] = await Promise.all([
-        fetchTechForPalestine(),
-        fetchTechForPalestineDaily(),
-        fetchReliefWeb()
-      ]);
-
-      let events = []
-        .concat(tfpSummary || [])
-        .concat(tfpDaily || [])
-        .concat(reliefWeb || [])
-        .map(item => item.event)
-        .filter(Boolean);
-
-      if (source) {
-        events = events.filter(e => e.source === source);
-      }
-
-      if (from) {
-        events = events.filter(e => e.date && e.date >= from);
-      }
-
-      if (to) {
-        events = events.filter(e => e.date && e.date <= to);
-      }
-
-      // Deterministic ordering (same logic as /external/events)
-      events.sort((a, b) => {
-        if (!a.date && !b.date) return 0;
-        if (!a.date) return 1;
-        if (!b.date) return -1;
-        return b.date.localeCompare(a.date);
-      });
-
-      // Resolve XLSX path from config (prefer gaza_timemap)
-      const xlsxList =
-        (config && config.xlsx) ||
-        (config && config.default && config.default.xlsx) ||
-        [];
-
-      const xlsxCfg =
-        xlsxList.find(x => x.name === 'gaza_timemap') ||
-        xlsxList[0];
-
-      // Hard fallback (keeps dev unblocked even if config is not injected)
-      const fallbackRelPath = 'data/gaza_timemap.xlsx';
-
-      const xlsxPath = xlsxCfg && xlsxCfg.path
-        ? path.resolve(process.cwd(), xlsxCfg.path)
-        : path.resolve(process.cwd(), fallbackRelPath);
-
-      if (!xlsxPath) {
-        return res.status(500).json({
-          error: 'No XLSX path could be resolved'
-        });
-      }
-
-      // Write events into export_events tab
-      writeEventsToXlsx({
-        xlsxPath,
-        sheetName: 'EXPORT_EVENTS',
-        events
-      });
-
-      // Reload datasheet-server in-memory state from XLSX
-      await controller.update();
+      
+      const count = await runSyncProcess('MANUAL-ADMIN');
 
       res.json({
         success: true,
-        wroteEvents: events.length,
-        xlsx: (xlsxCfg && xlsxCfg.name) || 'gaza_timemap',
-        path: (xlsxCfg && xlsxCfg.path) || fallbackRelPath
+        wroteEvents: count,
+        message: "Manual sync successful"
       });
-
     } catch (err) {
-      res.status(500).json({
-        error: 'Failed to sync external events into XLSX',
-        details: err.message
-      });
+      logError(err.message, 'SYNC-FAIL');
+      res.status(500).json({ error: 'Sync Failed', details: err.message });
     }
   });
 
-  // === External data availability & degradation monitoring ===
-  // Used to demonstrate resilience and partial failure handling.
-
+  // Health Check
   api.get('/external/health', async (req, res) => {
-    const status = {
-      techforpalestine: 'unknown',
-      techforpalestine_daily: 'unknown',
-      reliefweb: 'unknown',
-      acled: 'degraded'
-    };
-
-    try {
-      if ((await fetchTechForPalestine()).length) {
-        status.techforpalestine = 'ok';
-      }
-    } catch (_) {}
-
-    try {
-      if ((await fetchTechForPalestineDaily()).length) {
-        status.techforpalestine_daily = 'ok';
-      }
-    } catch (_) {}
-
-    try {
-      if ((await fetchReliefWeb()).length) {
-        status.reliefweb = 'ok';
-      }
-    } catch (_) {}
-
+    const status = { techforpalestine: 'unknown', techforpalestine_daily: 'unknown', reliefweb: 'unknown' };
+    try { if ((await fetchTechForPalestine()).length) status.techforpalestine = 'ok'; } catch (_) {}
+    try { if ((await fetchTechForPalestineDaily()).length) status.techforpalestine_daily = 'ok'; } catch (_) {}
+    try { if ((await fetchReliefWeb()).length) status.reliefweb = 'ok'; } catch (_) {}
     res.json(status);
   });
 
-  // === Datasheet resource routes ===
-
+  // Datasheet Resources
   api.get('/:sheet/:tab/:resource/:frag', (req, res) => {
     const { sheet, tab, resource, frag } = req.params;
     controller.retrieveFrag(sheet, tab, resource, frag)
       .then(data => res.json(data))
-      .catch(err =>
-        res.status(err.status || 404).send({ error: err.message })
-      );
+      .catch(err => res.status(err.status || 404).send({ error: err.message }));
   });
 
   api.get('/:sheet/:tab/:resource', (req, res) => {
     const { sheet, tab, resource } = req.params;
     controller.retrieve(sheet, tab, resource)
       .then(data => res.json(data))
-      .catch(err =>
-        res.status(err.status || 404).send({ error: err.message })
-      );
+      .catch(err => res.status(err.status || 404).send({ error: err.message }));
   });
 
-  // === Simplified error handling routes ===
-
+  // Errors
   api.get('/:sheet', (req, res) => {
-    res.status(400).send({
-      error: 'Invalid request: missing tab or resource.'
-    });
+    res.status(400).send({ error: 'Invalid request: missing tab or resource.' });
   });
 
   api.get('/:sheet/:tab', (req, res) => {
-    res.status(400).send({
-      error: 'Invalid request: missing resource fragment.'
-    });
+    res.status(400).send({ error: 'Invalid request: missing resource fragment.' });
   });
 
   return api;

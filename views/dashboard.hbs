@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Gaza Timemap | Analytics Command Center</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        body { background-color: #f8f9fa; }
+        .card { box-shadow: 0 4px 6px rgba(0,0,0,0.1); border: none; margin-bottom: 20px; }
+        .stat-card { text-align: center; padding: 20px; }
+        .stat-num { font-size: 2.5rem; font-weight: bold; color: #2c3e50; }
+        .stat-label { color: #7f8c8d; text-transform: uppercase; font-size: 0.8rem; letter-spacing: 1px; }
+        .chart-container { position: relative; height: 300px; }
+    </style>
+</head>
+<body>
+    <nav class="navbar navbar-dark bg-dark mb-4">
+        <div class="container">
+            <a class="navbar-brand" href="#">Timemap Command Center</a>
+            <span class="navbar-text">Live Data Feed</span>
+        </div>
+    </nav>
+
+    <div class="container">
+        <div class="row mb-4">
+            <div class="col-md-4">
+                <div class="card stat-card">
+                    <div class="stat-num" id="totalEvents">--</div>
+                    <div class="stat-label">Total Verified Events</div>
+                </div>
+            </div>
+            <div class="col-md-4">
+                <div class="card stat-card">
+                    <div class="stat-num" id="sourceCount">--</div>
+                    <div class="stat-label">Active Data Sources</div>
+                </div>
+            </div>
+            <div class="col-md-4">
+                <div class="card stat-card">
+                    <div class="stat-num" id="undatedEvents">--</div>
+                    <div class="stat-label">Undated Reports (Pending)</div>
+                </div>
+            </div>
+        </div>
+
+        <div class="row">
+            <div class="col-md-8">
+                <div class="card p-3">
+                    <h5 class="card-title">Events by Source (Distribution)</h5>
+                    <div class="chart-container">
+                        <canvas id="sourceChart"></canvas>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-4">
+                <div class="card p-3">
+                    <h5 class="card-title">System Health</h5>
+                    <ul class="list-group list-group-flush" id="healthList">
+                        <li class="list-group-item">Loading status...</li>
+                    </ul>
+                </div>
+                <div class="card p-3 mt-3">
+                    <h5 class="card-title">Actions</h5>
+                    <p class="small text-muted">Authorized personnel only.</p>
+                    <button onclick="triggerSync()" class="btn btn-primary w-100">
+                        🔄 Force Data Sync
+                    </button>
+                    <small id="syncStatus" class="d-block mt-2 text-center"></small>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+    <script>
+        // 1. Fetch Analytics Data
+        async function loadDashboard() {
+            try {
+                const res = await fetch('/api/external/analytics/events');
+                const data = await res.json();
+                
+                // Update Stats
+                document.getElementById('totalEvents').innerText = data.totalEvents;
+                document.getElementById('undatedEvents').innerText = data.undatedEvents;
+                document.getElementById('sourceCount').innerText = Object.keys(data.bySource).length;
+
+                // Render Chart
+                renderChart(data.bySource);
+                
+                // Load Health Check
+                loadHealth();
+            } catch (err) {
+                console.error("Dashboard Load Error", err);
+            }
+        }
+
+        // 2. Render Chart
+        function renderChart(sourceData) {
+            const ctx = document.getElementById('sourceChart').getContext('2d');
+            new Chart(ctx, {
+                type: 'bar',
+                data: {
+                    labels: Object.keys(sourceData),
+                    datasets: [{
+                        label: '# of Events',
+                        data: Object.values(sourceData),
+                        backgroundColor: ['#3498db', '#e74c3c', '#2ecc71'],
+                        borderWidth: 1
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    scales: { y: { beginAtZero: true } }
+                }
+            });
+        }
+
+        // 3. Health Status
+        async function loadHealth() {
+            const res = await fetch('/api/external/health');
+            const status = await res.json();
+            const list = document.getElementById('healthList');
+            list.innerHTML = '';
+            
+            for (const [service, state] of Object.entries(status)) {
+                const color = state === 'ok' ? 'text-success' : 'text-danger';
+                const icon = state === 'ok' ? '✅' : '❌';
+                list.innerHTML += `<li class="list-group-item d-flex justify-content-between align-items-center">
+                    ${service} <span class="${color} fw-bold">${icon} ${state.toUpperCase()}</span>
+                </li>`;
+            }
+        }
+
+        // 4. Trigger Sync (Innovation: Admin Action from UI)
+        async function triggerSync() {
+            const secret = prompt("Enter Admin Secret Key:");
+            if (!secret) return;
+            
+            const statusEl = document.getElementById('syncStatus');
+            statusEl.innerText = "Syncing...";
+            statusEl.className = "d-block mt-2 text-center text-warning";
+
+            try {
+                const res = await fetch(`/api/external/sync-xlsx?secret=${secret}`);
+                const json = await res.json();
+                
+                if (res.ok) {
+                    statusEl.innerText = `Success! Wrote ${json.wroteEvents} events.`;
+                    statusEl.className = "d-block mt-2 text-center text-success";
+                    setTimeout(loadDashboard, 2000); // Reload stats
+                } else {
+                    statusEl.innerText = `Error: ${json.error}`;
+                    statusEl.className = "d-block mt-2 text-center text-danger";
+                }
+            } catch (err) {
+                statusEl.innerText = "Network Error";
+            }
+        }
+
+        // Init
+        loadDashboard();
+    </script>
+</body>
+</html>
